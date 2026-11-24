@@ -1,0 +1,7 @@
+{
+  "appId": "in.gullak.app",
+  "appName": "Gullak",
+  "webDir": "www",
+  "android": { "allowMixedContent": false },
+  "plugins": {}
+}

@@ -1,0 +1,86 @@
+name: Build app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install
+        run: npm ci
+
+      - name: Stamp version into the app
+        run: sed -i "s/__BUILD__/${{ github.run_number }}/g; s#__REPO__#${{ github.repository }}#g" www/index.html www/sw.js
+
+      - name: Copy web app into Android project
+        run: npx cap sync android
+
+      - name: Build signed APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: money
+        run: |
+          if [ -z "$KEYSTORE_PASSWORD" ]; then echo "::error::Add the KEYSTORE_PASSWORD secret in Settings → Secrets and variables → Actions"; exit 1; fi
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 -in android/release.jks.enc -out "$RUNNER_TEMP/release.jks" -pass env:KEYSTORE_PASSWORD
+          export KEYSTORE_FILE="$RUNNER_TEMP/release.jks"
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/Gullak.apk"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Gullak v1.0.${{ github.run_number }}
+          make_latest: true
+          body: |
+            **Install on Android:** tap `Gullak.apk` below → open it → allow "Install unknown apps" for your browser if asked → Install.
+            Already have it? Installing this updates it and keeps your data.
+
+            ${{ github.event.head_commit.message }}
+          files: Gullak.apk
+
+      - name: Prepare website copy
+        run: cp -r www site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  web:
+    needs: android
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
